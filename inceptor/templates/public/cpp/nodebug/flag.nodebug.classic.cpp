@@ -136,18 +136,6 @@ __PPEB GetProcessEnvironmentBlock()
     return (__PPEB)pPeb;
 }
 
-fnNtQueryInformationProcess GetNtQueryInformationProcess() {
-    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
-    if (hNtdll == NULL) {
-        return NULL;
-    }
-
-    FARPROC func = GetProcAddress(hNtdll, "NtQueryInformationProcess");
-    fnNtQueryInformationProcess query_func = (fnNtQueryInformationProcess)func;
-
-    return query_func;
-}
-
 DWORD GetPidByProcessName(WCHAR* name) {
     PROCESSENTRY32W entry;
     memset(&entry, 0, sizeof(PROCESSENTRY32W));
@@ -318,28 +306,6 @@ int check_text_hash() {
     return 0;
 }
 
-bool veh_check(DWORD pid) {
-    fnNtQueryInformationProcess NtQueryInformationProcess = GetNtQueryInformationProcess();
-
-    ULONG ReturnLength;
-    PROCESS_BASIC_INFORMATION pbi;
-    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-
-    NtQueryInformationProcess(hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), &ReturnLength);
-    PPEB pPEB = (PPEB)pbi.PebBaseAddress;
-
-    SIZE_T Written;
-    DWORD64 CrossProcessFlags = -1;
-    ReadProcessMemory(hProcess, (PBYTE)pPEB + 0x50, (LPVOID)&CrossProcessFlags, sizeof(DWORD64), &Written);
-
-    if (CrossProcessFlags & 0x4) {
-        return true;
-    }
-    else {
-        return false;
-    }
-}
-
 void dr_register_check(DWORD pid) {
 
     DWORD tid = GetMainThreadId(pid);
@@ -382,5 +348,5 @@ bool is_being_debugged() {
 }
 
 bool ####FUNCTION####(){
-    return (is_being_debugged() || check_debug_string() || veh_check(GetCurrentProcessId()));
+    return (is_being_debugged() || check_debug_string());
 }

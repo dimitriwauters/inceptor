@@ -77,11 +77,15 @@ class TemplateModule:
     @staticmethod
     def from_name(name, **kwargs):
         try:
+            optional_pos = None
+            if "[" in name and "]" in name:
+                optional_pos = list(map(int, name[name.find("[")+1:name.find("]")].split(",")))
+                name = name[:name.find("[")]
             _module_name = "".join([n.capitalize() for n in str(name).split("_")])
             _class_string = f"engine.modules.{_module_name}Module.{_module_name}Module"
             # print(_class_string)
             _class = locate(_class_string)
-            _instance = _class(kwargs=kwargs['kwargs'])
+            _instance = _class(optional_pos=optional_pos, kwargs=kwargs['kwargs'])
             if not _instance.loadable or not hasattr(_instance, "loadable"):
                 raise ModuleNotLoadableException()
             return _instance

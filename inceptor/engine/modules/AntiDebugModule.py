@@ -21,7 +21,8 @@ from utils.utils import get_project_root, static_random_ascii_string
 
 
 class AntiDebugModule(TemplateModule):
-    def __init__(self, **kwargs):
+    def __init__(self, optional_pos, **kwargs):
+        self.optional_pos = optional_pos
         libraries = []
 
         language = kwargs["kwargs"]["language"]
@@ -72,7 +73,7 @@ class AntiDebugModule(TemplateModule):
         try:
             kwargs["dll"] = library
             kwargs["language"] = language
-            kwargs["template"] = self.generate(kwargs=kwargs)
+            kwargs["templates"] = self.generate(kwargs=kwargs)
             self.build(kwargs=kwargs)
         except:
             traceback.print_exc()
@@ -92,7 +93,7 @@ class AntiDebugModule(TemplateModule):
             if kwargs["kwargs"]["dinvoke"]:
                 _filter = Filter(include=["dinvoke"])
 
-            template = TemplateFactory.from_path(
+            templates = TemplateFactory.from_path(
                 path=os.path.join(
                     get_project_root(),
                     Config().get("DIRECTORIES", "dotnet"),
@@ -100,27 +101,31 @@ class AntiDebugModule(TemplateModule):
                 _filter=_filter
             )
         else:
-            template = TemplateFactory.from_path(
+            templates = TemplateFactory.from_path(
                 path=os.path.join(
                     get_project_root(),
                     Config().get("DIRECTORIES", "native"),
-                    Config().get("DIRECTORIES", "antidebug"))
+                    Config().get("DIRECTORIES", "antidebug")),
+                _multiple_files=self.optional_pos
             )
 
-        for k, v in zip(
-                ["import", "class", "function"],
-                ["####NAMESPACE####", "####CLASS####", "####FUNCTION####"]
-        ):
-            template.otf_replace(
-                code=kwargs["kwargs"][k],
-                placeholder=v
-            )
+        result = []
+        for template in templates:
+            for k, v in zip(
+                    ["import", "class", "function"],
+                    ["####NAMESPACE####", "####CLASS####", "####FUNCTION####"]
+            ):
+                template.otf_replace(
+                    code=kwargs["kwargs"][k],
+                    placeholder=v
+                )
 
-        if kwargs["kwargs"]["dinvoke"] and language == language.CSHARP:
-            template.add_module(DinvokeModule(language=Language.CSHARP))
+            if kwargs["kwargs"]["dinvoke"] and language == language.CSHARP:
+                template.add_module(DinvokeModule(language=Language.CSHARP))
 
-        template.process_modules()
-        return template
+            template.process_modules()
+            result.append(template)
+        return result
 
     def build(self, **kwargs):
         if "language" not in kwargs["kwargs"].keys():
@@ -135,21 +140,22 @@ class AntiDebugModule(TemplateModule):
         else:
             nodebug_file += ".cpp"
 
-        template = kwargs["kwargs"]["template"]
-        with open(nodebug_file, "w") as out:
-            out.write(template.content)
-        if language == Language.CSHARP:
-            compiler = CscCompiler()
-            compiler.default_dll_args(outfile=kwargs["kwargs"]["dll"])
-            compiler.set_libraries(template.libraries)
-            compiler.compile([nodebug_file])
-        else:
-            object_file = os.path.splitext(kwargs["kwargs"]["dll"])[0] + ".obj"
-            compiler = ClCompiler()
-            compiler.default_obj_args(outfile=object_file)
-            compiler.set_libraries(["dbghelp.lib"])
-            compiler.compile([nodebug_file])
-            compiler = LibCompiler()
-            compiler.default_args(outfile=kwargs["kwargs"]["dll"])
-            compiler.compile([object_file])
+        templates = kwargs["kwargs"]["templates"]
+        for template in templates:
+            with open(nodebug_file, "w") as out:
+                out.write(template.content)
+            if language == Language.CSHARP:
+                compiler = CscCompiler()
+                compiler.default_dll_args(outfile=kwargs["kwargs"]["dll"])
+                compiler.set_libraries(template.libraries)
+                compiler.compile([nodebug_file])
+            else:
+                object_file = os.path.splitext(kwargs["kwargs"]["dll"])[0] + ".obj"
+                compiler = ClCompiler()
+                compiler.default_obj_args(outfile=object_file)
+                compiler.set_libraries(["dbghelp.lib"])
+                compiler.compile([nodebug_file])
+                compiler = LibCompiler()
+                compiler.default_args(outfile=kwargs["kwargs"]["dll"])
+                compiler.compile([object_file])
 

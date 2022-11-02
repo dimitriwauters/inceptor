@@ -17,7 +17,7 @@ from utils.utils import get_project_root, isDotNet
 class TemplateFactory:
 
     @staticmethod
-    def from_path(path, language=Language.CSHARP, _filter: Filter = None):
+    def from_path(path, language=Language.CSHARP, _filter: Filter = None, _multiple_files: list = None):
         allfiles = []
         if os.path.isfile(path):
             return Template(path=path, language=language)
@@ -26,15 +26,21 @@ class TemplateFactory:
         if _filter:
             allfiles = [f for f in allfiles if _filter.match(f)]
         if len(allfiles) > 1:
-            temp = TemplateFactory.choose_template(allfiles)
+            if _multiple_files is not None:
+                temp = list(allfiles[i] for i in _multiple_files)
+            else:
+                temp = [TemplateFactory.choose_template(allfiles)]
         else:
-            temp = allfiles[0]
+            temp = [allfiles[0]]
 
-        path = os.path.join(path, temp)
-        if not os.path.isfile(path=path):
-            Console.auto_line("  [-] Error with template")
-            sys.exit(1)
-        return Template(path=path, language=language)
+        return_val = list()
+        for tmp in temp:
+            module_path = os.path.join(path, tmp)
+            if not os.path.isfile(path=module_path):
+                Console.auto_line("  [-] Error with template")
+                sys.exit(1)
+            return_val.append(Template(path=module_path, language=language))
+        return return_val
 
     @staticmethod
     def from_converter(file=None,
@@ -107,6 +113,7 @@ class TemplateFactory:
 
     @staticmethod
     def choose_template(templates: list):
+        print(templates)
         try:
             Console.auto_line("[*] Multiple compatible templates identified, choose one:")
             choice = -1
