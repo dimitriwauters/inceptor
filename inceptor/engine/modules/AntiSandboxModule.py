@@ -1,0 +1,159 @@
+import os
+import sys
+import tempfile
+import traceback
+
+from compilers.ClCompiler import ClCompiler
+from compilers.CscCompiler import CscCompiler
+from compilers.LibCompiler import LibCompiler
+from config.Config import Config
+from engine.Filter import Filter
+from engine.TemplateFactory import TemplateFactory
+from engine.component.AntiDebugComponent import AntiDebugComponent
+from engine.component.CodeComponent import CodeComponent
+from engine.component.UsingComponent import UsingComponent
+from engine.modules.DinvokeModule import DinvokeModule
+from engine.modules.TemplateModule import TemplateModule, ModuleNotCompatibleException
+from enums.Language import Language
+from utils.utils import get_project_root, static_random_ascii_string
+
+
+class AntiSandboxModule(TemplateModule):
+    def __init__(self, optional_pos, **kwargs):
+        self.optional_pos = optional_pos
+        libraries = []
+
+        language = kwargs["kwargs"]["language"]
+        arch = kwargs["kwargs"]["arch"]
+
+        import_name = static_random_ascii_string(min_size=3, max_size=10)
+        class_name = static_random_ascii_string(min_size=3, max_size=10)
+        function_name = static_random_ascii_string(min_size=3, max_size=10)
+
+        kwargs = {
+            "dinvoke": False,
+            "import": import_name,
+            "class": class_name,
+            "function": function_name,
+        }
+
+        if language == Language.CSHARP:
+            library = tempfile.NamedTemporaryFile(
+                delete=True,
+                dir=str(Config().get_path("DIRECTORIES", "WRITER")),
+                suffix=".dll"
+            ).name
+
+            components = [
+                AntiDebugComponent(f"{import_name}.{class_name}.{function_name}();"),
+                UsingComponent(import_name, language=language)
+            ]
+        elif language == Language.CPP:
+            libraries.append("dbghelp.lib")
+            library = tempfile.NamedTemporaryFile(
+                delete=True,
+                dir=str(Config().get_path("DIRECTORIES", "WRITER")),
+                suffix=".lib"
+            ).name
+
+            components = [
+                CodeComponent(rf"""
+                        extern bool {function_name}(void);
+                        """),
+                AntiDebugComponent(rf"""
+                                if ({function_name}()){{
+                                    exit(-1);
+                                }}
+                            """)
+            ]
+        else:
+            raise ModuleNotCompatibleException()
+        try:
+            kwargs["dll"] = library
+            kwargs["language"] = language
+            kwargs["templates"] = self.generate(kwargs=kwargs)
+            self.build(kwargs=kwargs)
+        except:
+            traceback.print_exc()
+            print(f"[-] Exception building {self.__class__.__name__}")
+            sys.exit(1)
+
+        libraries.append(library)
+
+        super().__init__(name="AntiSandbox", libraries=libraries, components=components, arch=arch)
+
+    def generate(self, **kwargs):
+        if "language" not in kwargs["kwargs"].keys():
+            raise NotImplementedError(f"Module {self.__class__.__name__} needs a language to build")
+        language = kwargs["kwargs"]["language"]
+
+        if language == language.CSHARP:
+            _filter = Filter(exclude=["dinvoke"])
+            if kwargs["kwargs"]["dinvoke"]:
+                _filter = Filter(include=["dinvoke"])
+
+            templates = TemplateFactory.from_path(
+                path=os.path.join(
+                    get_project_root(),
+                    Config().get("DIRECTORIES", "dotnet"),
+                    Config().get("DIRECTORIES", "antisandbox")),
+                _filter=_filter
+            )
+        else:
+            templates = TemplateFactory.from_path(
+                path=os.path.join(
+                    get_project_root(),
+                    Config().get("DIRECTORIES", "native"),
+                    Config().get("DIRECTORIES", "antisandbox")),
+                _multiple_files=self.optional_pos
+            )
+
+        result = []
+        for template in templates:
+            for k, v in zip(
+                    ["import", "class", "function"],
+                    ["####NAMESPACE####", "####CLASS####", "####FUNCTION####"]
+            ):
+                template.otf_replace(
+                    code=kwargs["kwargs"][k],
+                    placeholder=v
+                )
+
+            if kwargs["kwargs"]["dinvoke"] and language == language.CSHARP:
+                template.add_module(DinvokeModule(language=Language.CSHARP))
+
+            template.process_modules()
+            result.append(template)
+        return result
+
+    def build(self, **kwargs):
+        if "language" not in kwargs["kwargs"].keys():
+            raise NotImplementedError(f"Module {self.__class__.__name__} needs a language to build")
+        language = kwargs["kwargs"]["language"]
+        nosandbox_file = tempfile.NamedTemporaryFile(
+            delete=False,
+            dir=str(Config().get_path("DIRECTORIES", "WRITER"))
+        ).name
+        if language == Language.CSHARP:
+            nosandbox_file += ".cs"
+        else:
+            nosandbox_file += ".cpp"
+
+        templates = kwargs["kwargs"]["templates"]
+        for template in templates:
+            with open(nosandbox_file, "w") as out:
+                out.write(template.content)
+            if language == Language.CSHARP:
+                compiler = CscCompiler()
+                compiler.default_dll_args(outfile=kwargs["kwargs"]["dll"])
+                compiler.set_libraries(template.libraries)
+                compiler.compile([nosandbox_file])
+            else:
+                object_file = os.path.splitext(kwargs["kwargs"]["dll"])[0] + ".obj"
+                compiler = ClCompiler()
+                compiler.default_obj_args(outfile=object_file)
+                compiler.set_libraries(["dbghelp.lib"])
+                compiler.compile([nosandbox_file])
+                compiler = LibCompiler()
+                compiler.default_args(outfile=kwargs["kwargs"]["dll"])
+                compiler.compile([object_file])
