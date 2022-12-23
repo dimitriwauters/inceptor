@@ -74,13 +74,18 @@ bool checkProcesses() {
 }
 
 bool checkDLL() {
-    return (checkIfDLLLoaded("api_log.dll") ||
-            checkIfDLLLoaded("dir_watch.dll") ||
-            checkIfDLLLoaded("sbiedll.dll") ||
-            checkIfDLLLoaded("dbghelp.dll") ||
-            checkIfDLLLoaded("vmcheck.dll") ||
-            checkIfDLLLoaded("wpespy.dll") ||
-            checkIfDLLLoaded("pstorec.dll") ||
+    return (checkIfDLLLoaded("api_log.dll") || // iDefense Lab
+            checkIfDLLLoaded("dir_watch.dll") || // iDefense Lab
+            checkIfDLLLoaded("sbiedll.dll") || // Sandboxie
+            checkIfDLLLoaded("dbghelp.dll") || // WindBG
+            checkIfDLLLoaded("vmcheck.dll") || // Virtual PC
+            checkIfDLLLoaded("wpespy.dll") || // WPE Pro
+            checkIfDLLLoaded("pstorec.dll") || // SunBelt Sandbox
+            checkIfDLLLoaded("avghookx.dll") || // AVG
+            checkIfDLLLoaded("avghooka.dll") || // AVG
+            checkIfDLLLoaded("snxhk.dll") || // Avast
+            checkIfDLLLoaded("cmdvrt64.dll") || // Comodo Container
+            checkIfDLLLoaded("cmdvrt32.dll") || // Comodo Container
             // ------------------------------- FAKE DLL BELOW
             !checkIfDLLLoaded("NetProjW.dll") ||
             !checkIfDLLLoaded("Ghofr.dll") ||

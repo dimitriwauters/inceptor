@@ -136,60 +136,21 @@ __PPEB GetProcessEnvironmentBlock()
     return (__PPEB)pPeb;
 }
 
-DWORD GetPidByProcessName(WCHAR* name) {
-    PROCESSENTRY32W entry;
-    memset(&entry, 0, sizeof(PROCESSENTRY32W));
-    entry.dwSize = sizeof(PROCESSENTRY32W);
-
-    DWORD pid = -1;
-    HANDLE hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
-    if (Process32FirstW(hSnapShot, &entry)) {
-        do {
-            if (!wcscmp(name, entry.szExeFile)) {
-                pid = entry.th32ProcessID;
-                break;
-            }
-        } while (Process32Next(hSnapShot, &entry));
+fnNtQueryInformationProcess GetNtQueryInformationProcess() {
+    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    if (hNtdll == NULL) {
+        return NULL;
     }
-
-    CloseHandle(hSnapShot);
-
-    return pid;
+    FARPROC func = GetProcAddress(hNtdll, "NtQueryInformationProcess");
+    fnNtQueryInformationProcess query_func = (fnNtQueryInformationProcess)func;
+    return query_func;
 }
 
-DWORD GetMainThreadId(DWORD pid) {
-    THREADENTRY32 th32;
-    memset(&th32, 0, sizeof(THREADENTRY32));
-    th32.dwSize = sizeof(THREADENTRY32);
+// ---------------------------------------------------------------------------------------------------------------------
+// https://github.com/revsic/AntiDebugging/blob/master/Sources/TextSectionHasher.cpp
+// ---------------------------------------------------------------------------------------------------------------------
 
-    DWORD dwMainThreadID = -1;
-
-    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, NULL);
-    if (Thread32First(hSnapshot, &th32)) {
-        DWORD64 ullMinCreateTime = 0xFFFFFFFFFFFFFFFF;
-
-        do {
-            if (th32.th32OwnerProcessID == pid) {
-                HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, th32.th32ThreadID);
-
-                if (hThread) {
-                    FILETIME afTimes[4] = { 0 };
-                    if (GetThreadTimes(hThread, &afTimes[0], &afTimes[1], &afTimes[2], &afTimes[3])) {
-                        ULONGLONG ullTest = MAKEULONGLONG(afTimes[0].dwLowDateTime, afTimes[0].dwHighDateTime);
-                        if (ullTest && ullTest < ullMinCreateTime) {
-                            ullMinCreateTime = ullTest;
-                            dwMainThreadID = th32.th32ThreadID;
-                        }
-                    }
-                    CloseHandle(hThread);
-                }
-            }
-        } while (Thread32Next(hSnapshot, &th32));
-    }
-
-    CloseHandle(hSnapshot);
-    return dwMainThreadID;
-}
+bool bTerminateThread = false;
 
 int GetAllModule(std::vector<LPVOID>& modules) {
     MODULEENTRY32W mEntry;
@@ -252,9 +213,7 @@ DWORD64 HashSection(LPVOID lpSectionAddress, DWORD dwSizeOfRawData) {
     return hash;
 }
 
-bool bTerminateThread = false;
-
-bool CheckTextHash(PHASHSET pHashSet) {
+bool CheckTextHash(PHASHSET pHashSet, BOOL* result) {
     DWORD64 dwRealHash = pHashSet->dwRealHash;
     DWORD dwSizeOfRawData = pHashSet->SectionInfo.dwSizeOfRawData;
     LPVOID lpVirtualAddress = pHashSet->SectionInfo.lpVirtualAddress;
@@ -264,26 +223,25 @@ bool CheckTextHash(PHASHSET pHashSet) {
 
         DWORD64 dwCurrentHash = HashSection(lpVirtualAddress, dwSizeOfRawData);
         if (dwRealHash != dwCurrentHash) {
+            *result = true;
             return true;
         }
 
         if (bTerminateThread) {
+            *result = false;
             return false;
         }
     }
 }
 
-int ExitThreads(std::vector<std::thread>& threads) {
+void ExitThreads(std::vector<std::thread>& threads) {
     bTerminateThread = true;
-
     for (auto& thread : threads) {
         thread.join();
     }
-
-    return 0;
 }
 
-int check_text_hash() {
+bool check_text_hash() {
     std::vector<LPVOID> modules;
     GetAllModule(modules);
 
@@ -293,28 +251,67 @@ int check_text_hash() {
     std::vector<HASHSET> hashes;
     hashes.reserve(modules.size());
 
+    std::vector<BOOL> results;
+    results.reserve(modules.size());
+
     for (auto& module : modules) {
         SECTIONINFO info;
         GetTextSectionInfo(module, &info);
 
         DWORD64 dwRealHash = HashSection(info.lpVirtualAddress, info.dwSizeOfRawData);
         hashes.emplace_back(HASHSET{ dwRealHash, info });
-        threads.emplace_back(std::thread(CheckTextHash, &hashes.back()));
+        threads.emplace_back(std::thread(CheckTextHash, &hashes.back(), &results.back()));
     }
     ExitThreads(threads);
 
-    return 0;
+    for (auto& result : results) {
+           if(result) return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+/*DWORD GetMainThreadId(DWORD pid) {
+    THREADENTRY32 th32;
+    memset(&th32, 0, sizeof(THREADENTRY32));
+    th32.dwSize = sizeof(THREADENTRY32);
+
+    DWORD dwMainThreadID = -1;
+
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, NULL);
+    if (Thread32First(hSnapshot, &th32)) {
+        DWORD64 ullMinCreateTime = 0xFFFFFFFFFFFFFFFF;
+
+        do {
+            if (th32.th32OwnerProcessID == pid) {
+                HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, th32.th32ThreadID);
+
+                if (hThread) {
+                    FILETIME afTimes[4] = { 0 };
+                    if (GetThreadTimes(hThread, &afTimes[0], &afTimes[1], &afTimes[2], &afTimes[3])) {
+                        ULONGLONG ullTest = MAKEULONGLONG(afTimes[0].dwLowDateTime, afTimes[0].dwHighDateTime);
+                        if (ullTest && ullTest < ullMinCreateTime) {
+                            ullMinCreateTime = ullTest;
+                            dwMainThreadID = th32.th32ThreadID;
+                        }
+                    }
+                    CloseHandle(hThread);
+                }
+            }
+        } while (Thread32Next(hSnapshot, &th32));
+    }
+
+    CloseHandle(hSnapshot);
+    return dwMainThreadID;
 }
 
 void dr_register_check(DWORD pid) {
-
     DWORD tid = GetMainThreadId(pid);
-
     HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, tid);
     if (hThread == NULL) {
         return;
     }
-
     CONTEXT ctx;
     memset(&ctx, 0, sizeof(CONTEXT));
     ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
@@ -327,9 +324,80 @@ void dr_register_check(DWORD pid) {
 
     SetThreadContext(hThread, &ctx);
     CloseHandle(hThread);
+}*/
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+/*DWORD GetPidByProcessName(WCHAR* name) {
+    PROCESSENTRY32W entry;
+    memset(&entry, 0, sizeof(PROCESSENTRY32W));
+    entry.dwSize = sizeof(PROCESSENTRY32W);
+
+    DWORD pid = -1;
+    HANDLE hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
+    if (Process32FirstW(hSnapShot, &entry)) {
+        do {
+            if (!wcscmp(name, entry.szExeFile)) {
+                pid = entry.th32ProcessID;
+                break;
+            }
+        } while (Process32Next(hSnapShot, &entry));
+    }
+
+    CloseHandle(hSnapShot);
+
+    return pid;
+}*/
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+// https://anti-debug.checkpoint.com/techniques/debug-flags.html#using-win32-api-ntqueryinformationprocess-processdebugport
+bool processdebugport() {
+    typedef NTSTATUS (WINAPI* fnNtQueryInformationProcess)(IN  HANDLE, IN  UINT, OUT PVOID, IN ULONG, OUT PULONG);
+    fnNtQueryInformationProcess NtQueryInformationProcess = (fnNtQueryInformationProcess)GetNtQueryInformationProcess();
+    DWORD dwProcessDebugPort, dwReturned;
+    NTSTATUS status = NtQueryInformationProcess(GetCurrentProcess(), ProcessDebugPort, &dwProcessDebugPort, sizeof(DWORD), &dwReturned);
+    return (NT_SUCCESS(status) && (-1 == dwProcessDebugPort));
 }
 
-bool check_debug_string(void) {
+// https://anti-debug.checkpoint.com/techniques/debug-flags.html#using-win32-api-ntqueryinformationprocess-processdebugflags
+bool processdebugflags() {
+    typedef NTSTATUS (WINAPI* fnNtQueryInformationProcess)(IN  HANDLE, IN  UINT, OUT PVOID, IN ULONG, OUT PULONG);
+    fnNtQueryInformationProcess NtQueryInformationProcess = (fnNtQueryInformationProcess)GetNtQueryInformationProcess();
+    DWORD dwProcessDebugFlags, dwReturned;
+    const DWORD ProcessDebugFlags = 0x1f;
+    NTSTATUS status = NtQueryInformationProcess(GetCurrentProcess(), ProcessDebugFlags, &dwProcessDebugFlags, sizeof(DWORD), &dwReturned);
+    return (NT_SUCCESS(status) && (0 == dwProcessDebugFlags));
+}
+
+// https://anti-debug.checkpoint.com/techniques/debug-flags.html#using-win32-api-ntqueryinformationprocess-processdebugobjecthandle
+bool processdebugobjecthandle() {
+    typedef NTSTATUS (WINAPI* fnNtQueryInformationProcess)(IN  HANDLE, IN  UINT, OUT PVOID, IN ULONG, OUT PULONG);
+    fnNtQueryInformationProcess NtQueryInformationProcess = (fnNtQueryInformationProcess)GetNtQueryInformationProcess();
+    DWORD dwReturned;
+    HANDLE hProcessDebugObject = 0;
+    const DWORD ProcessDebugObjectHandle = 0x1e;
+    NTSTATUS status = NtQueryInformationProcess(GetCurrentProcess(), ProcessDebugObjectHandle, &hProcessDebugObject, sizeof(HANDLE), &dwReturned);
+    return (NT_SUCCESS(status) && (0 != hProcessDebugObject));
+}
+
+// https://github.com/LordNoteworthy/al-khaser/blob/master/al-khaser/AntiDebug/CheckRemoteDebuggerPresent.cpp
+bool remote_debugger_present() {
+    BOOL bIsDbgPresent = FALSE;
+	CheckRemoteDebuggerPresent(GetCurrentProcess(), &bIsDbgPresent);
+	return bIsDbgPresent;
+}
+
+// https://anti-debug.checkpoint.com/techniques/debug-flags.html#using-win32-api-checks-rtlqueryprocessheapinformation
+/*bool rtlqueryprocessheapinformation() {
+    DEBUG_BUFFER pDebugBuffer = RtlCreateQueryDebugBuffer(0, FALSE);
+    if (!SUCCEEDED(RtlQueryProcessHeapInformation((PRTL_DEBUG_INFORMATION)pDebugBuffer)))
+        return false;
+    ULONG dwFlags = ((PRTL_PROCESS_HEAPS)pDebugBuffer->HeapInformation)->Heaps[0].Flags;
+    return dwFlags & ~HEAP_GROWABLE;
+}*/
+
+bool check_debug_string() {
     DWORD errorValue = 1111;
     SetLastError(errorValue);
     OutputDebugString(L" ");
@@ -338,15 +406,10 @@ bool check_debug_string(void) {
 
 bool is_being_debugged() {
     __PPEB peb = GetProcessEnvironmentBlock();
-    if (peb->bBeingDebugged) {
-        return true;
-    }
-    if (peb->dwNtGlobalFlag & NT_GLOBAL_FLAG_DEBUGGED) {
-        return true;
-    }
-    return false;
+    return (peb->bBeingDebugged) || (peb->dwNtGlobalFlag & NT_GLOBAL_FLAG_DEBUGGED);
 }
 
 bool ####FUNCTION####(){
-    return (is_being_debugged() || check_debug_string());
+    return (is_being_debugged() || check_debug_string() || remote_debugger_present() || check_text_hash() ||
+            processdebugport() || processdebugflags() || processdebugobjecthandle());
 }

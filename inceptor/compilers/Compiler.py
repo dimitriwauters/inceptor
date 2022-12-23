@@ -67,6 +67,7 @@ class Compiler(ABC):
             if Config().get_boolean("DEBUG", "COMPILERS"):
                 print(output.decode())
         except subprocess.CalledProcessError as e:
+            print(e.output)
             for line in e.output.decode().split("\n"):
                 if re.search(r"error", line):
                     print(f"  [-] Error: {line}")

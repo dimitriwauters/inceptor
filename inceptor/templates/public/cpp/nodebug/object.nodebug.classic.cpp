@@ -141,13 +141,12 @@ fnNtQueryInformationProcess GetNtQueryInformationProcess() {
     if (hNtdll == NULL) {
         return NULL;
     }
-
     FARPROC func = GetProcAddress(hNtdll, "NtQueryInformationProcess");
     fnNtQueryInformationProcess query_func = (fnNtQueryInformationProcess)func;
-
     return query_func;
 }
 
+// https://anti-debug.checkpoint.com/techniques/object-handles.html#openprocess
 bool veh_check(DWORD pid) {
     fnNtQueryInformationProcess NtQueryInformationProcess = GetNtQueryInformationProcess();
 
@@ -162,15 +161,11 @@ bool veh_check(DWORD pid) {
     DWORD64 CrossProcessFlags = -1;
     ReadProcessMemory(hProcess, (PBYTE)pPEB + 0x50, (LPVOID)&CrossProcessFlags, sizeof(DWORD64), &Written);
 
-    if (CrossProcessFlags & 0x4) {
-        return true;
-    }
-    else {
-        return false;
-    }
+    return (CrossProcessFlags & 0x4);
 }
 
-bool checkCreateFile() {
+// https://anti-debug.checkpoint.com/techniques/object-handles.html#createfile
+bool check_create_file() {
     CHAR szFileName[MAX_PATH];
     if (0 == GetModuleFileNameA(NULL, szFileName, sizeof(szFileName)))
         return false;
@@ -178,8 +173,8 @@ bool checkCreateFile() {
     return INVALID_HANDLE_VALUE == CreateFileA(szFileName, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, 0);
 }
 
-bool checkCloseHandle()
-{
+// https://anti-debug.checkpoint.com/techniques/object-handles.html#closehandle
+bool check_close_handle() {
     __try {
         CloseHandle((HANDLE)0xDEADBEEF);
         return false;
@@ -189,7 +184,8 @@ bool checkCloseHandle()
     }
 }
 
-bool checkLoadLibrary()
+// https://anti-debug.checkpoint.com/techniques/object-handles.html#loadlibrary
+bool check_load_library()
 {
     CHAR szBuffer[] = { "C:\\Windows\\System32\\calc.exe" };
     LoadLibraryA(szBuffer);
@@ -197,5 +193,5 @@ bool checkLoadLibrary()
 }
 
 bool ####FUNCTION####(){
-    return (veh_check(GetCurrentProcessId()) || checkCreateFile() || checkCloseHandle() || checkLoadLibrary());
+    return (veh_check(GetCurrentProcessId()) || check_create_file() || check_close_handle() || check_load_library());
 }
